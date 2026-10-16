@@ -1,0 +1,32 @@
+{
+  "name": "lab-slack-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lab 004: an AI assistant that lives in Slack, built on Plain Function's capabilities.",
+  "imports": {
+    "#capabilities": "./capabilities/index.ts"
+  },
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.toml",
+    "dev:secrets": "node scripts/dev-secrets.mjs",
+    "db:local": "wrangler d1 execute slack-agent --local --config wrangler.toml --file capabilities/core/schema.sql",
+    "db:remote": "wrangler d1 execute slack-agent --remote --config wrangler.toml --file capabilities/core/schema.sql",
+    "typecheck": "tsc -p tsconfig.json",
+    "sync:capabilities": "node scripts/sync-capabilities.mjs",
+    "check:capabilities": "node scripts/sync-capabilities.mjs --check",
+    "test": "node scripts/sync-capabilities.mjs --check && vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.6",
+    "@cloudflare/workers-types": "4.20260702.1",
+    "@types/node": "24.13.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.107.0"
+  }
+}
