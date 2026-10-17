@@ -89,3 +89,81 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at  TEXT NOT NULL,
   updated_by  TEXT NOT NULL
 );
+
+-- ── PWA shell (core/pwa) ────────────────────────────────────────────────────
+
+-- People who can open the app. id is also the WebAuthn user handle.
+CREATE TABLE IF NOT EXISTS pwa_users (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  role        TEXT NOT NULL,           -- one of the app's roles (core/pwa/roles.ts)
+  created_at  TEXT NOT NULL
+);
+
+-- Their passkeys: public keys only. id is the credential id, base64url.
+CREATE TABLE IF NOT EXISTS pwa_passkeys (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
+  public_key    TEXT NOT NULL,
+  alg           INTEGER NOT NULL,
+  sign_count    INTEGER NOT NULL,
+  label         TEXT NOT NULL,
+  synced        INTEGER NOT NULL,
+  created_at    TEXT NOT NULL,
+  last_used_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS pwa_passkeys_by_user ON pwa_passkeys (user_id);
+
+-- Invite links. id is the SHA-256 of the link's token. Deleted on use.
+CREATE TABLE IF NOT EXISTS pwa_invites (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  role        TEXT NOT NULL,
+  user_id     TEXT,
+  created_by  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
+);
+
+-- Signed-in devices. id is the SHA-256 of the cookie's token.
+CREATE TABLE IF NOT EXISTS pwa_sessions (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  passkey_id  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  seen_at     TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pwa_sessions_by_passkey ON pwa_sessions (passkey_id);
+CREATE INDEX IF NOT EXISTS pwa_sessions_by_user ON pwa_sessions (user_id);
+
+-- Passkey challenges in flight, five minutes each. id is the SHA-256 of the
+-- challenge. Deleted on use, so each works once.
+CREATE TABLE IF NOT EXISTS pwa_challenges (
+  id          TEXT PRIMARY KEY,
+  purpose     TEXT NOT NULL,
+  payload     TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
+);
+
+-- Whose device each push subscription is (the subscriptions themselves are
+-- sealed in KV). Recovering or removing someone, or removing a device, stops
+-- notifications reaching it.
+CREATE TABLE IF NOT EXISTS pwa_push (
+  endpoint    TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  passkey_id  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pwa_push_by_user ON pwa_push (user_id);
+
+-- Automations waiting for a passkey tap, ten minutes each. Arguments are
+-- sealed (context "pwa-call:<id>").
+CREATE TABLE IF NOT EXISTS pwa_calls (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  tool        TEXT NOT NULL,
+  sealed      TEXT NOT NULL,
+  challenge   TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL
+);

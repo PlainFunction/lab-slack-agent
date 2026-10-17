@@ -11,7 +11,18 @@ export type SlackInput =
   | 'datepicker' | 'timepicker' | 'static_select' | 'checkboxes' | 'users_select' | 'conversations_select'
   /** Ours, not Slack's: a pick of the images attached in the conversation. */
   | 'image_select'
-export type SlackOutput = 'header' | 'field' | 'text' | 'context' | 'image' | 'link'
+export type SlackOutput = 'header' | 'field' | 'text' | 'context' | 'image' | 'link' | 'list'
+
+/** One row of an `out.list`: a job, a quote, an invoice. */
+export interface ListItem {
+  title: string
+  /** A second line, e.g. the suburb. */
+  detail?: string
+  /** Short, shown beside the title, e.g. "7:30am" or "$1,850". */
+  meta?: string
+}
+
+const listItem = z.object({ title: z.string().min(1).max(200), detail: z.string().max(500).optional(), meta: z.string().max(60).optional() })
 
 /** Images a tool can be given or hand back. Slack shows these inline. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
@@ -75,6 +86,8 @@ export const out = {
   image: (label: string) => hint(z.union([httpsUrl, z.string().regex(DATA_IMAGE).max(Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 64)]), { element: 'image', label }),
   /** A link, shown as the label pointing at the URL. https only. */
   link: (label: string) => hint(httpsUrl, { element: 'link', label }),
+  /** Rows, each a title with an optional detail line and a short meta, like a time or an amount. Up to 50. */
+  list: (label: string) => hint(z.array(listItem).max(50), { element: 'list', label }),
 }
 
 export interface ToolAnnotations {
@@ -98,6 +111,12 @@ export interface CallContext {
   answers?: ElicitAnswer[]
   /** An image attached in this conversation, by id. Anything else is refused. */
   file?(id: string): Promise<FileData>
+  /**
+   * Whether the person asking holds a permission, e.g. `ctx.can?.('see:prices')`,
+   * so a tool can show more to some people than others. Set by callers that have
+   * roles (the app); absent elsewhere, and never sent to MCP tools.
+   */
+  can?(permission: string): boolean
 }
 
 export type ElicitAnswer = { action: 'accept'; content: Record<string, unknown> } | { action: 'decline' }
@@ -191,10 +210,11 @@ export const toJsonSchema = (schema: z.ZodType, io: 'input' | 'output'): JsonSch
   return rest as JsonSchema
 }
 
-/** Slack forms are flat, and every field needs a hint, or the server won't start. */
+/** Slack forms are flat, and every field needs a hint, or the server won't start. The one list allowed is `out.list`. */
 function checkHints(where: string, schema: JsonSchema) {
   for (const [key, prop] of Object.entries(schema.properties ?? {})) {
-    if (prop.type === 'object' || prop.type === 'array') throw new ConfigError(`${where}.${key}: Slack forms are flat, so no nested objects or lists`)
+    const list = prop.type === 'array' && prop['x-slack']?.element === 'list'
+    if ((prop.type === 'object' || prop.type === 'array') && !list) throw new ConfigError(`${where}.${key}: Slack forms are flat, so no nested objects or lists`)
     if (!prop['x-slack']) throw new ConfigError(`${where}.${key} has no Slack hint. Use ui.* for inputs and out.* for outputs`)
   }
 }

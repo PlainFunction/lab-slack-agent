@@ -1,4 +1,4 @@
-import { MAX_IMAGE_BYTES, type FileRef, type JsonSchema, type JsonSchemaProp, type SlackHint } from '../tools/contract'
+import { MAX_IMAGE_BYTES, type FileRef, type JsonSchema, type JsonSchemaProp, type ListItem, type SlackHint } from '../tools/contract'
 import { escapeSlack } from './mrkdwn'
 
 // Block Kit, drawn from a tool's JSON Schema. One declaration gives the
@@ -191,6 +191,17 @@ export function withoutImageData(content: Record<string, unknown>): Record<strin
     [k, typeof v === 'string' && v.startsWith('data:image/') ? `[an image, ${kb(Math.floor(v.length * 3 / 4))}, shown to the person in Slack]` : v]))
 }
 
+/** An `out.list`: one line per row, the meta in front like a time on a run sheet. */
+function listBlocks(label: string, v: unknown): Block[] {
+  if (!Array.isArray(v) || v.length === 0) return []
+  const rows = v.map(item => {
+    const i = item as ListItem
+    const first = `• ${i.meta ? `${escapeSlack(i.meta)}  ` : ''}*${escapeSlack(i.title)}*`
+    return i.detail ? `${first}\n   ${escapeSlack(i.detail)}` : first
+  })
+  return textBlocks(`*${escapeSlack(label)}*\n${rows.join('\n')}`)
+}
+
 /** A tool's result, laid out from its output hints. Values are escaped: tools return plain text. */
 export function resultBlocks(title: string, schema: JsonSchema | undefined, content: Record<string, unknown>): Block[] {
   const blocks: Block[] = [{ type: 'context', elements: [mrkdwn(`✓ ${escapeSlack(title)}`)] }]
@@ -206,6 +217,7 @@ export function resultBlocks(title: string, schema: JsonSchema | undefined, cont
     else if (hint.element === 'image') { if (isHttps(v)) blocks.push({ type: 'image', image_url: v, alt_text: hint.label.slice(0, 2000) }) }
     else if (hint.element === 'link') fields.push(mrkdwn(`*${escapeSlack(hint.label)}*\n${isHttps(v) ? link(v, v.replace(/^https:\/\//, '').slice(0, 80)) : show(v)}`))
     else if (hint.element === 'context') blocks.push({ type: 'context', elements: [mrkdwn(show(v))] })
+    else if (hint.element === 'list') blocks.push(...listBlocks(hint.label, v))
     else if (hint.element === 'text') blocks.push(...textBlocks(show(v)))
     else fields.push(mrkdwn(`*${escapeSlack(hint.label)}*\n${show(v)}`))
   }
