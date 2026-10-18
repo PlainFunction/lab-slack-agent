@@ -29,8 +29,8 @@ npm run dev       # wrangler dev, with GLM 4.7 Flash on Workers AI
 ## What it uses from capabilities
 
 `capabilities/` holds copies of the parts of our capabilities it uses, so it
-runs on its own. `capabilities/index.ts` says which parts, and
-`scripts/sync-capabilities.mjs` keeps the copies in step with ours. **Don't
+runs on its own. `capabilities/index.ts` says which parts, and the copies are kept in step
+with ours automatically. **Don't
 edit the copies**: they're overwritten from the source on every sync.
 
 The agent is `capabilities/core/slack-agent`: the loop, the tool contract,
