@@ -1,6 +1,6 @@
 # Lab 004: an AI assistant that lives in Slack
 
-The code behind our lab [An AI Assistant That Lives in Slack](https://plainfunction.com.au/labs/slack-agent). Slack is the
+The code behind our lab [Our AI Assistant Lives in Slack and Asks Before It Acts](https://plainfunction.com.au/labs/slack-agent). Slack is the
 whole interface: you talk to it in a DM or a thread, and anything that changes
 something shows up as a Slack form with every argument filled in and editable.
 Nothing runs until someone allowed says yes.
