@@ -1,6 +1,7 @@
 import { Port } from '../kernel/port'
 
-export interface UsageEvent { feature: string; model: string; inputTokens: number; outputTokens: number }
+/** `cachedInputTokens`, when given, is the part of `inputTokens` the model served from its prompt cache (cheaper). */
+export interface UsageEvent { feature: string; model: string; inputTokens: number; outputTokens: number; cachedInputTokens?: number }
 
 /** Counts what each client's automations cost to run. Never sees content. */
 export abstract class UsageMeter extends Port {

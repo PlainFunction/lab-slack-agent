@@ -7,7 +7,7 @@ import type { FileRef } from '../tools/contract'
 // with minutes to spare instead of seconds.
 
 export type Job =
-  | { type: 'message'; conversation: string; channel: string; thread?: string; ts: string; user: string; text: string; files?: FileRef[]; skipped?: string[] }
+  | { type: 'message'; conversation: string; channel: string; thread?: string; ts: string; user: string; text: string; files?: FileRef[]; texts?: FileRef[]; skipped?: string[] }
   | {
     type: 'decision'
     /** From the button: approval id and its signed token. */

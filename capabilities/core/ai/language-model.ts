@@ -21,14 +21,29 @@ export interface CompletionRequest {
   sensitive?: { label: string; value: string }[]
   /** Which automation is asking, for usage metering and AI Gateway logs. */
   feature?: string
+  /**
+   * Requests that share a session go to the same model instance, so a prompt
+   * that starts the same way as an earlier one reuses its cached prefix, at a
+   * fraction of the input price. Sent to Workers AI as `x-session-affinity`.
+   */
+  session?: string
 }
 
 export interface Completion {
   text: string
   model: string
-  usage: { inputTokens: number; outputTokens: number }
+  /** `cachedInputTokens` is the part of `inputTokens` served from the model's prompt cache. */
+  usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
   cached?: boolean
 }
+
+/**
+ * The AI Gateway model calls go through unless a module names another. Cloudflare
+ * creates a gateway called "default" on the first request, so there's nothing to
+ * set up. Prompts and answers aren't logged (collectLog false); the gateway still
+ * counts requests, tokens and cost.
+ */
+export const DEFAULT_GATEWAY = 'default'
 
 export abstract class LanguageModel extends Port {
   abstract complete(req: CompletionRequest): Promise<Completion>
@@ -108,17 +123,21 @@ export class WorkersAiModel extends LanguageModel {
         : { type: 'json_schema', json_schema: forWorkersAi(req.jsonSchema) }
     }
 
-    const out = await this.#ai.run(this.#model, inputs, this.#gateway ? {
-      gateway: {
-        id: this.#gateway.id,
-        cacheTtl: this.#gateway.cacheTtl,
-        collectLog: this.#gateway.collectLog ?? false,
-        metadata: req.feature ? { feature: req.feature } : undefined,
-      },
-    } : undefined) as {
+    const options = {
+      ...(this.#gateway ? {
+        gateway: {
+          id: this.#gateway.id,
+          cacheTtl: this.#gateway.cacheTtl,
+          collectLog: this.#gateway.collectLog ?? false,
+          metadata: req.feature ? { feature: req.feature } : undefined,
+        },
+      } : {}),
+      ...(req.session ? { extraHeaders: { 'x-session-affinity': req.session } } : {}),
+    }
+    const out = await this.#ai.run(this.#model, inputs, Object.keys(options).length ? options : undefined) as {
       response?: unknown
       choices?: { message?: { content?: unknown }; finish_reason?: string }[]
-      usage?: { prompt_tokens?: number; completion_tokens?: number }
+      usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } }
     }
 
     // Older models answer in `response`. OpenAI-shaped ones (GLM, Kimi) answer in
@@ -133,7 +152,10 @@ export class WorkersAiModel extends LanguageModel {
     return {
       text,
       model: this.#model,
-      usage: { inputTokens: out.usage?.prompt_tokens ?? 0, outputTokens: out.usage?.completion_tokens ?? 0 },
+      usage: {
+        inputTokens: out.usage?.prompt_tokens ?? 0, outputTokens: out.usage?.completion_tokens ?? 0,
+        ...(out.usage?.prompt_tokens_details?.cached_tokens ? { cachedInputTokens: out.usage.prompt_tokens_details.cached_tokens } : {}),
+      },
     }
   }
 
@@ -222,7 +244,10 @@ export class MeteredLanguageModel extends LanguageModelDecorator {
   async complete(req: CompletionRequest): Promise<Completion> {
     const out = await this.inner.complete(req)
     if (!out.cached) {
-      await this.#meter.record({ feature: req.feature ?? 'unknown', model: out.model, inputTokens: out.usage.inputTokens, outputTokens: out.usage.outputTokens })
+      await this.#meter.record({
+        feature: req.feature ?? 'unknown', model: out.model, inputTokens: out.usage.inputTokens, outputTokens: out.usage.outputTokens,
+        ...(out.usage.cachedInputTokens ? { cachedInputTokens: out.usage.cachedInputTokens } : {}),
+      })
     }
     return out
   }

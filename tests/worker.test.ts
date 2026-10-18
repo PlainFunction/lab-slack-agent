@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
-import { AesGcmCipher, ScriptedVisionModel, SlackWebhookVerifier, b64url, randomBytes, type AgentEnv } from '#capabilities'
+import { AesGcmCipher, ScriptedImageModel, ScriptedLanguageModel, ScriptedVisionModel, SlackWebhookVerifier, b64url, randomBytes, type AgentEnv } from '#capabilities'
 import worker from '../src/worker'
 import { tools } from '../src/tools'
 
@@ -36,7 +36,7 @@ describe('this Worker', () => {
 
   it('has the time, notes and image tools', async () => {
     const cipher = new AesGcmCipher(JSON.parse(keyring()))
-    const servers = tools({ env: labEnv(), cipher, timeZone: async () => 'Australia/Sydney', vision: new ScriptedVisionModel('x'), registry: {} as never })
+    const servers = tools({ env: labEnv(), cipher, timeZone: async () => 'Australia/Sydney', vision: new ScriptedVisionModel('x'), images: new ScriptedImageModel(), model: new ScriptedLanguageModel('{}'), writer: new ScriptedLanguageModel('{}'), registry: {} as never })
     const names = (await Promise.all(servers.map(async s => (await s.list()).map(t => `${s.name}__${t.name}`)))).flat()
     expect(names).toEqual(['time__now', 'time__days_until', 'notes__save', 'notes__list', 'notes__forget', 'images__describe'])
   })

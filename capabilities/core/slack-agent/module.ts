@@ -1,4 +1,4 @@
-import { LanguageModel, MeteredLanguageModel, RedactingLanguageModel, WorkersAiModel } from '../ai/language-model'
+import { DEFAULT_GATEWAY, LanguageModel, MeteredLanguageModel, RedactingLanguageModel, WorkersAiModel } from '../ai/language-model'
 import { ApprovalStore, D1ApprovalStore } from '../approvals/approval-store'
 import { AuditLog, D1AuditLog } from '../audit/audit-log'
 import { Clock, SystemClock } from '../kernel/clock'
@@ -16,7 +16,7 @@ import { CloudflareTelemetry, OtlpTelemetry, Telemetry } from '../telemetry/tele
 import { Agent } from './agent/agent'
 import { ToolApprovals } from './agent/approvals'
 import { ConversationStore, D1ConversationStore } from './agent/conversations'
-import { CredentialBroker } from './agent/credentials'
+import { CredentialBroker, type CredentialHosts } from './agent/credentials'
 import { CloudflareJobQueue, JobQueue, type SealedJob } from './agent/jobs'
 import { OfflineModel } from './agent/offline-model'
 import { ConnectedAccounts, D1TokenVault, TokenVault, parseOAuthProviders } from '../integrations/oauth'
@@ -25,6 +25,7 @@ import { D1SpendLedger, SpendLedger } from './agent/spend'
 import { ToolBox } from './agent/toolbox'
 import { Chat, SlackChat } from './slack/chat'
 import { MeteredVisionModel, ScriptedVisionModel, VisionModel, WorkersAiVisionModel } from '../ai/vision-model'
+import { ImageModel, MeteredImageModel, ScriptedImageModel, WorkersAiImageModel } from '../ai/image-model'
 import { imageTools, timeTools } from './tools/builtin'
 import type { ToolServer } from './tools/contract'
 import { McpToolServer } from './tools/mcp'
@@ -42,11 +43,20 @@ export interface AgentEnv extends SettingsEnv {
   AI_MODEL?: string
   /** The Workers AI model images__describe uses. Default Mistral Small 3.1. */
   AI_VISION_MODEL?: string
+  /** The Workers AI model tools make images with. Default Lucid Origin. */
+  AI_IMAGE_MODEL?: string
+  /** The Workers AI model for writing people will read, like social posts. Default DeepSeek V4 Pro. */
+  AI_WRITER_MODEL?: string
+  /** The AI Gateway every model call goes through. Default "default", which Cloudflare creates on first use. */
   AI_GATEWAY_ID?: string
   DB: D1Database
   KV: KVNamespace
   JOBS: Queue<SealedJob>
-  /** JSON. Credential name → hosts it may be sent to, e.g. {"github":["api.github.com"]}. */
+  /**
+   * JSON. Credential name → hosts it may be sent to, e.g. {"github":["api.github.com"]}, or
+   * {"zernio":{"hosts":["zernio.com"],"uploads":["*.r2.cloudflarestorage.com"]}} for an API
+   * that hands out presigned upload URLs (reached in the credential's name, never with it).
+   */
   CREDENTIAL_HOSTS?: string
   /** JSON. Tool server name → remote MCP URL. */
   MCP_SERVERS?: string
@@ -71,11 +81,19 @@ export interface AgentEnv extends SettingsEnv {
 export const SETTINGS = new Token<AgentSettings>('settings', Object as unknown as Class<AgentSettings>)
 export const SLACK_VERIFIER = new Token<WebhookVerifier>('slack-verifier', WebhookVerifier)
 export const TOOL_SERVERS = new Token<ToolServer[]>('tool-servers', Array)
+/** The stronger model for writing people will read (AI_WRITER_MODEL). Bound like LanguageModel: redacted and metered. */
+export const WriterModel = new Token<LanguageModel>('writer-model', LanguageModel as unknown as Class<LanguageModel>)
 
 const VERSION = '0.1.0'
 
 /** Fast, cheap, and good at picking tools. Answers in JSON mode in about a second with thinking off. */
 export const DEFAULT_MODEL = '@cf/zai-org/glm-4.7-flash'
+/**
+ * For writing that goes out under the business's name. The agent's own model
+ * is fine for picking a tool, but its posts read like AI wrote them; tried on
+ * the same write-up, DeepSeek V4 Pro kept to the facts and sounded like a person.
+ */
+export const DEFAULT_WRITER_MODEL = '@cf/deepseek-ai/deepseek-v4-pro-0813'
 
 /**
  * What some models need, measured against the real thing:
@@ -87,6 +105,9 @@ export const DEFAULT_MODEL = '@cf/zai-org/glm-4.7-flash'
  */
 export const MODEL_OPTIONS: Record<string, { inputs?: Record<string, unknown>; jsonMode?: 'schema' | 'object' }> = {
   '@cf/zai-org/glm-4.7-flash': { inputs: { chat_template_kwargs: { enable_thinking: false } }, jsonMode: 'object' },
+  // Thinking off for the same reason. Their JSON mode keeps the whole post, line breaks and all.
+  '@cf/deepseek-ai/deepseek-v4-pro-0813': { inputs: { chat_template_kwargs: { thinking: false } }, jsonMode: 'object' },
+  '@cf/deepseek-ai/deepseek-v4-flash-0731': { inputs: { chat_template_kwargs: { thinking: false } }, jsonMode: 'object' },
 }
 
 const parseJson = <T>(name: string, raw: string | undefined): T | undefined => {
@@ -103,6 +124,12 @@ export interface ToolsContext<E extends AgentEnv = AgentEnv> {
   timeZone: () => Promise<string>
   /** A vision model, metered into the spend cap, for tools that look at images. */
   vision: VisionModel
+  /** An image model, metered into the spend cap, for tools that make images. */
+  images: ImageModel
+  /** The agent's own language model (redacted, metered), for tools that need a quick answer. */
+  model: LanguageModel
+  /** A stronger model (redacted, metered) for writing people will read, like posts. AI_WRITER_MODEL. */
+  writer: LanguageModel
   registry: Registry
 }
 
@@ -180,20 +207,29 @@ export class SlackAgentModule<E extends AgentEnv = AgentEnv> extends Module {
 
   /** Core's model stack: redact, then meter into the spend ledger, then Workers AI through AI Gateway. */
   protected ai(c: Registry) {
-    c.bind(LanguageModel, c => {
-      const model = this.env.AI_MODEL || DEFAULT_MODEL
-      const base = model === 'offline'
-        ? new OfflineModel()
-        : new WorkersAiModel({ ai: this.env.AI, model, ...MODEL_OPTIONS[model], gateway: this.env.AI_GATEWAY_ID ? { id: this.env.AI_GATEWAY_ID } : undefined })
-      return new RedactingLanguageModel(new MeteredLanguageModel(base, c.get(SpendLedger)), c.get(Redactor))
-    })
+    c.bind(LanguageModel, c => this.languageModel(c, this.env.AI_MODEL || DEFAULT_MODEL))
+    c.bind(WriterModel, c => this.languageModel(c, this.env.AI_MODEL === 'offline' ? 'offline' : this.env.AI_WRITER_MODEL || DEFAULT_WRITER_MODEL))
     // Only tools call this, and what it says goes on to the main model, which is redacted.
     c.bind(VisionModel, c => {
       const base = this.env.AI_MODEL === 'offline'
         ? new ScriptedVisionModel('(offline stand-in) An image. No real vision model is connected, so nothing more can be said about it.')
-        : new WorkersAiVisionModel({ ai: this.env.AI, model: this.env.AI_VISION_MODEL || undefined, gateway: this.env.AI_GATEWAY_ID ? { id: this.env.AI_GATEWAY_ID } : undefined })
+        : new WorkersAiVisionModel({ ai: this.env.AI, model: this.env.AI_VISION_MODEL || undefined, gateway: { id: this.env.AI_GATEWAY_ID || DEFAULT_GATEWAY } })
       return new MeteredVisionModel(base, c.get(SpendLedger))
     })
+    // Only tools call this, with a prompt they wrote. The image goes to Slack, never to the model.
+    c.bind(ImageModel, c => {
+      const base = this.env.AI_MODEL === 'offline'
+        ? new ScriptedImageModel()
+        : new WorkersAiImageModel({ ai: this.env.AI, model: this.env.AI_IMAGE_MODEL || undefined, gateway: { id: this.env.AI_GATEWAY_ID || DEFAULT_GATEWAY } })
+      return new MeteredImageModel(base, c.get(SpendLedger))
+    })
+  }
+
+  protected languageModel(c: Registry, model: string): LanguageModel {
+    const base = model === 'offline'
+      ? new OfflineModel()
+      : new WorkersAiModel({ ai: this.env.AI, model, ...MODEL_OPTIONS[model], gateway: { id: this.env.AI_GATEWAY_ID || DEFAULT_GATEWAY } })
+    return new RedactingLanguageModel(new MeteredLanguageModel(base, c.get(SpendLedger)), c.get(Redactor))
   }
 
   protected slack(c: Registry) {
@@ -202,7 +238,10 @@ export class SlackAgentModule<E extends AgentEnv = AgentEnv> extends Module {
 
   /** Our own tools, then any MCP servers. Override to change the set. */
   protected toolServers(c: Registry): ToolServer[] {
-    const own: ToolsContext<E> = { env: this.env, cipher: c.get(Cipher), timeZone: this.timeZone(c), vision: c.get(VisionModel), registry: c }
+    const own: ToolsContext<E> = {
+      env: this.env, cipher: c.get(Cipher), timeZone: this.timeZone(c),
+      vision: c.get(VisionModel), images: c.get(ImageModel), model: c.get(LanguageModel), writer: c.get(WriterModel), registry: c,
+    }
     const servers: ToolServer[] = this.options.tools ? this.options.tools(own) : [timeTools(own.timeZone), imageTools(own.vision)]
     for (const [name, url] of Object.entries(parseJson<Record<string, string>>('MCP_SERVERS', this.env.MCP_SERVERS) ?? {})) {
       servers.push(new McpToolServer(name, { url }))
@@ -231,7 +270,7 @@ export class SlackAgentModule<E extends AgentEnv = AgentEnv> extends Module {
     }
     c.bind(CredentialBroker, c => new CredentialBroker({
       secrets: c.get(SecretStore),
-      hosts: parseJson<Record<string, string[]>>('CREDENTIAL_HOSTS', this.env.CREDENTIAL_HOSTS) ?? {},
+      hosts: parseJson<CredentialHosts>('CREDENTIAL_HOSTS', this.env.CREDENTIAL_HOSTS) ?? {},
       audit: c.get(AuditLog),
       connected: c.has(ConnectedAccounts) ? c.get(ConnectedAccounts) : undefined,
     }))

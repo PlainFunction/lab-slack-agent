@@ -28,11 +28,11 @@ export abstract class Chat extends Port {
   abstract react(m: { channel: string; ts: string; name: string }): Promise<void>
   /** A file someone shared, up to `maxBytes`. */
   abstract download(id: string, maxBytes: number): Promise<FileData>
-  /** Shares a file in the channel or thread, e.g. an image a tool made. */
-  abstract upload(m: Place & { name: string; title?: string; bytes: Uint8Array }): Promise<void>
+  /** Shares a file in the channel or thread, e.g. an image a tool made, and returns its file id. */
+  abstract upload(m: Upload): Promise<{ id: string }>
 }
 
-export interface Upload extends Place { name: string; title?: string; bytes: Uint8Array }
+export interface Upload extends Place { name: string; title?: string; mimetype: string; bytes: Uint8Array }
 
 /**
  * Slack's Web API with the bot token. Slack answers 200 with `ok: false` for
@@ -92,6 +92,7 @@ export class SlackChat extends Chat {
     const sent = await this.#http.request(upload_url, { method: 'POST', body: m.bytes })
     if (!sent.ok) throw new UpstreamError('Slack', sent.status, 'file upload refused')
     await this.#form('files.completeUploadExternal', { files: JSON.stringify([{ id: file_id, title: m.title ?? m.name }]), channel_id: m.channel, thread_ts: m.thread })
+    return { id: file_id }
   }
 
   // Slack caps message text at 40,000 characters; the blocks carry the real content.
@@ -154,7 +155,13 @@ export class MemoryChat extends Chat {
     if (f.bytes.byteLength > maxBytes) throw new NotAllowedError('That file is too big')
     return { ...f, bytes: f.bytes.slice() }
   }
-  async upload(m: Upload) { this.uploads.push({ ...m, bytes: m.bytes.slice() }) }
+  /** Kept in `files` too, as Slack would, so a later tool can download it. */
+  async upload(m: Upload) {
+    const id = `FMADE${String(this.uploads.length + 1).padStart(4, '0')}`
+    this.uploads.push({ ...m, bytes: m.bytes.slice() })
+    this.files.set(id, { id, name: m.name, mimetype: m.mimetype, bytes: m.bytes.slice() })
+    return { id }
+  }
 
   describe(): Manifest {
     return { name: 'Memory chat', use: 'Tests', personalInfo: [], storesIn: 'Memory' }

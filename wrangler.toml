@@ -35,8 +35,9 @@ MAX_CAP_USD = "50"
 # AI_MODEL = "offline"
 # What images__describe uses. Unset, it's @cf/mistralai/mistral-small-3.1-24b-instruct.
 # AI_VISION_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct"
-# Calls go through this AI Gateway once it exists (dashboard, AI, AI Gateway, same name).
-# AI_GATEWAY_ID = "slack-agent"
+# Every AI call goes through the AI Gateway called "default", which Cloudflare creates on the
+# first request. Name another gateway here to use that instead.
+# AI_GATEWAY_ID = "default"
 # Per tool, allow / ask / never. Tools that change things ask unless set here.
 # TOOL_POLICY = '{"notes__save":"ask"}'
 # Remote MCP servers, by name. They never get a credential.

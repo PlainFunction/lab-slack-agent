@@ -1,4 +1,4 @@
-import { MAX_IMAGE_BYTES, type FileRef, type JsonSchema, type JsonSchemaProp, type ListItem, type SlackHint } from '../tools/contract'
+import { FILE_ELEMENTS, MAX_IMAGE_BYTES, fileIds, filesOfKind, type FileRef, type JsonSchema, type JsonSchemaProp, type ListItem, type SlackHint, type SlackInput } from '../tools/contract'
 import { escapeSlack } from './mrkdwn'
 
 // Block Kit, drawn from a tool's JSON Schema. One declaration gives the
@@ -41,11 +41,20 @@ function element(name: string, prop: JsonSchemaProp, hint: SlackHint, value: unk
       const options = (prop.enum ?? []).slice(0, 100).map(option)
       return { ...base, options, ...(has && prop.enum?.includes(value) ? { initial_option: option(value) } : {}) }
     }
-    case 'image_select': {
+    case 'image_select':
+    case 'document_select': {
       // Newest first: the one just attached is usually the one meant.
-      const options = [...files].reverse().slice(0, 100).map(fileOption)
-      const picked = files.find(f => f.id === value)
+      const mine = filesOfKind(files, FILE_ELEMENTS[hint.element]!)
+      const options = [...mine].reverse().slice(0, 100).map(fileOption)
+      const picked = mine.find(f => f.id === value)
       return { type: 'static_select', action_id: name, options, ...(picked ? { initial_option: fileOption(picked) } : {}) }
+    }
+    case 'images_select': {
+      // In the order given, so a carousel keeps its slide order; then the rest, newest first.
+      const mine = filesOfKind(files, 'image')
+      const picked = fileIds(value).map(id => mine.find(f => f.id === id)).filter((f): f is FileRef => !!f)
+      const options = [...picked, ...[...mine].reverse().filter(f => !picked.includes(f))].slice(0, 100).map(fileOption)
+      return { type: 'multi_static_select', action_id: name, options, ...(picked.length ? { initial_options: picked.map(fileOption) } : {}) }
     }
     case 'checkboxes': {
       const yes = { text: plain(hint.label, 75), value: 'yes' }
@@ -61,8 +70,10 @@ function element(name: string, prop: JsonSchemaProp, hint: SlackHint, value: unk
 export function inputBlock(name: string, prop: JsonSchemaProp, value: unknown, required: boolean, missing = false, files: FileRef[] = []): Block {
   const hint = hintFor(name, prop)
   // A select needs at least one option, so with nothing attached there's nothing to pick.
-  if (hint.element === 'image_select' && files.length === 0) {
-    return { type: 'section', block_id: name, text: mrkdwn(`*${escapeSlack(hint.label)}*\nAttach an image in this conversation, then ask again.`) }
+  const kind = FILE_ELEMENTS[hint.element as SlackInput]
+  if (kind && filesOfKind(files, kind).length === 0) {
+    const what = kind === 'image' ? 'an image' : 'a text file (.md, .txt, .csv or .json)'
+    return { type: 'section', block_id: name, text: mrkdwn(`*${escapeSlack(hint.label)}*\nAttach ${what} in this conversation, then ask again.`) }
   }
   const help = missing ? 'Needed before this can run.' : prop.description
   return {
