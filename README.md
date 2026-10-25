@@ -146,6 +146,8 @@ and can stop to ask a question with `ctx.elicit`, as `notes__forget` does.
    Slack (Ctrl+R). The desktop app keeps showing the old notice until then.
    For connected accounts, also create an OAuth app with the callback
    `<PUBLIC_URL>/oauth/callback`.
+   Uncomment `routes` in `wrangler.toml` with that host: workers.dev is off,
+   so the custom domain is the only address Slack can reach.
 2. `wrangler d1 create slack-agent --location oc`, `wrangler kv namespace create slack-agent`,
    `wrangler queues create slack-agent-jobs`, and put the ids in `wrangler.toml`.
 3. Apply the schema (`capabilities/core/schema.sql`): `npm run db:local` for
@@ -164,6 +166,23 @@ and can stop to ask a question with `ctx.elicit`, as `notes__forget` does.
    the workspace's address). They're secrets, not vars, so whose workspace this
    is stays out of git: in `.dev.vars` for `wrangler dev`, and
    `wrangler secret put <NAME> --config wrangler.toml` for the deployed one.
+
+## Switching it off
+
+An admin says `settings` in a DM and pauses it. While it's paused it answers
+nothing but settings, and forms already waiting can't be sent. Unpause it the
+same way. If Slack itself is the problem, `wrangler delete --config wrangler.toml`
+removes the Worker and nothing else answers Slack's events.
+
+## If a key leaks
+
+Pause it first, then replace the one that leaked:
+
+- **`SLACK_BOT_TOKEN`**: on api.slack.com/apps, under OAuth & Permissions, revoke tokens and reinstall the app, then put the new one.
+- **`SLACK_SIGNING_SECRET`**: regenerate it under Basic Information, then put it.
+- **`KEYRING`**: add a new key to the JSON, point `current` at it, and `wrangler secret put KEYRING --config wrangler.toml`. New data is sealed with the new key and old data still opens. Conversations sealed before then stay under the old key until they're pruned (30 days), so drop the old key after that.
+- **`SIGNING_KEY`**: a new random one. Links already sent (OAuth connections in progress) stop working.
+- **`CREDENTIAL_<NAME>`** and **`OAUTH_<NAME>_CLIENT_SECRET`**: make new ones at the service and put them. A credential only ever goes to its hosts in `CREDENTIAL_HOSTS`, and remote MCP servers never get one.
 
 ## Tested, and not yet tested
 
